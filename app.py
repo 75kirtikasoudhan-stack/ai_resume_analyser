@@ -1,115 +1,211 @@
 import streamlit as st
+import pdfplumber
 import pandas as pd
-import matplotlib.pyplot as plt
-import os
+import re
+from io import BytesIO
 
-from main import extract_text_from_pdf
-from main import score_resume
+# ------------------------
+# Page Setup
+# ------------------------
 
 st.set_page_config(
     page_title="AI Resume Analyzer",
+    page_icon="📄",
     layout="wide"
 )
 
-st.title("🤖 AI Resume Analyzer")
+# ------------------------
+# Functions
+# ------------------------
 
-st.write(
-    "Resume Ranking and Candidate Comparison Dashboard"
+def extract_text_from_pdf(file):
+
+    text = ""
+
+    with pdfplumber.open(file) as pdf:
+
+        for page in pdf.pages:
+
+            page_text = page.extract_text()
+
+            if page_text:
+                text += page_text + "\n"
+
+    return text
+
+
+def extract_keywords(text):
+
+    text = text.lower()
+
+    words = re.findall(r'\b[a-zA-Z]+\b', text)
+
+    return set(words)
+
+
+def analyze_resume(resume_text, jd_text):
+
+    resume_skills = extract_keywords(resume_text)
+
+    jd_skills = extract_keywords(jd_text)
+
+    matched = resume_skills.intersection(jd_skills)
+
+    missing = jd_skills.difference(resume_skills)
+
+    score = 0
+
+    if len(jd_skills) > 0:
+
+        score = round(
+            (len(matched) / len(jd_skills)) * 100
+        )
+
+    return score, matched, missing
+
+
+# ------------------------
+# Title
+# ------------------------
+
+st.title("📄 AI Resume Analyzer")
+
+st.markdown("---")
+
+# ------------------------
+# Job Description
+# ------------------------
+
+job_description = st.text_area(
+    "📌 Enter Job Description",
+    height=250,
+    placeholder="""
+Data Analyst
+
+Python
+SQL
+Pandas
+NumPy
+Power BI
+Tableau
+Excel
+Data Visualization
+Machine Learning
+"""
 )
 
-job_desc = st.text_area(
-    "Paste Job Description Here"
+# ------------------------
+# Upload Resumes
+# ------------------------
+
+uploaded_files = st.file_uploader(
+    "Upload Multiple Resumes",
+    type=["pdf"],
+    accept_multiple_files=True
 )
 
-results = []
+# ------------------------
+# Analyze
+# ------------------------
 
-resume_folder = "resumes"
+if st.button("🚀 Analyze Resumes"):
 
-if os.path.exists(resume_folder):
+    if job_description == "":
 
-    for file in os.listdir(resume_folder):
+        st.warning("Enter Job Description")
 
-        if file.endswith(".pdf"):
+    elif len(uploaded_files) == 0:
 
-            filepath = os.path.join(
-                resume_folder,
-                file
+        st.warning("Upload Resume Files")
+
+    else:
+
+        results = []
+
+        for resume in uploaded_files:
+
+            resume_text = extract_text_from_pdf(
+                resume
             )
 
-            text = extract_text_from_pdf(
-                filepath
+            score, matched, missing = analyze_resume(
+                resume_text,
+                job_description
             )
 
-            score, feedback = score_resume(
-                text
-            )
-
-            results.append(
-                {
-                    "Resume": file,
-                    "Score": score
-                }
-            )
-
-    if len(results) > 0:
+            results.append({
+                "Resume": resume.name,
+                "Match %": score,
+                "Matched Skills":
+                    ", ".join(sorted(matched)),
+                "Missing Skills":
+                    ", ".join(sorted(missing))
+            })
 
         df = pd.DataFrame(results)
 
         df = df.sort_values(
-            by="Score",
+            by="Match %",
             ascending=False
         )
 
-        st.subheader(
-            "🏆 Candidate Ranking"
+        df.reset_index(
+            drop=True,
+            inplace=True
         )
 
-        st.dataframe(df)
+        df.index += 1
 
-        best_candidate = df.iloc[0]
+        st.success("Analysis Completed")
+
+        st.subheader("🏆 Candidate Ranking")
+
+        st.dataframe(
+            df,
+            use_container_width=True
+        )
+
+        # Best Candidate
+
+        best = df.iloc[0]
+
+        st.subheader(
+            "🥇 Best Matching Candidate"
+        )
 
         st.success(
-            f"Best Candidate : "
-            f"{best_candidate['Resume']} "
-            f" | Score : "
-            f"{best_candidate['Score']}"
+            f"{best['Resume']} | Match Score: {best['Match %']}%"
         )
 
-        st.subheader(
-            "📊 Candidate Comparison"
-        )
+        # Chart
+
+        st.subheader("📊 Match Comparison")
+
+        chart_df = df[["Resume", "Match %"]]
 
         st.bar_chart(
-            df.set_index("Resume")
+            chart_df.set_index("Resume")
         )
 
-        fig, ax = plt.subplots()
+        # Download Excel
 
-        ax.pie(
-            df["Score"],
-            labels=df["Resume"],
-            autopct="%1.1f%%"
-        )
+        output = BytesIO()
 
-        st.subheader(
-            "📈 Score Distribution"
-        )
+        with pd.ExcelWriter(
+            output,
+            engine="openpyxl"
+        ) as writer:
 
-        st.pyplot(fig)
+            df.to_excel(
+                writer,
+                index=False
+            )
 
-        csv = df.to_csv(
-            index=False
-        )
+        excel_data = output.getvalue()
 
         st.download_button(
-            "⬇ Download Report",
-            csv,
-            "candidate_report.csv",
-            "text/csv"
+            label="📥 Download Report",
+            data=excel_data,
+            file_name="Resume_Report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-else:
-
-    st.error(
-        "resumes folder not found"
-    )
